@@ -15,7 +15,7 @@ if __name__ == '__main__':
 
     measurementParams = {
         'lengthDomain': 'time',
-        'timeLength': 3,
+        'timeLength': 10,
         'samplingRate': 48000,
         'freqMin': 20,
         'freqMax': 20000,

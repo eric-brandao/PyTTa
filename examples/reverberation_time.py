@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
     myRT = pytta.RoomAnalysis(myIRsignal,
                               nthOct=3,
-                              minFreq=float(2e1),
-                              maxFreq=float(2e4))
+                              minFreq=float(100),
+                              maxFreq=float(10000))
     fig = myRT.plot_T30()
     fig.show()

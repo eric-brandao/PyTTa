@@ -964,7 +964,7 @@ class RoomAnalysis(Analysis):
         nbands = maxBand - minBand + 1
         super().__init__('mixed', nthOct, minFreq, maxFreq, nbands*[0], *args, **kwargs)
         self.ir = crop_IR(_ir, ircut)
-        self._params = self.estimate_energy_parameters(self.ir, self.bands, plotLundeby,
+        self._params, self.listEDC, self.fhSignal = self.estimate_energy_parameters(self.ir, self.bands, plotLundeby,
                                                        bypassLundeby, suppressWarnings,
                                                        nthOct=nthOct, minFreq=minFreq,
                                                        maxFreq=maxFreq)
@@ -1006,7 +1006,7 @@ class RoomAnalysis(Analysis):
         params['T20'] = reverberation_time(20, listEDC)
         params['T30'] = reverberation_time(30, listEDC)
         # self._params['BR'], self._params['TR'] = timbre_ratios(self.T20)
-        return params
+        return params, listEDC, fhSignal
 
     @property
     def parameters(self):
@@ -1609,7 +1609,7 @@ def central_time(sqrIR: np.ndarray, tstamp: np.ndarray) -> np.ndarray:
     """
     sumSIR = sqrIR.sum(axis=0)
     sumTSIR = (tstamp[:, None] * sqrIR).sum(axis=0)
-    central_time = (sumTSIR / sumSIR) * 1000  # milisseconds
+    central_time = (sumTSIR / sumSIR) #* 1000  # milisseconds
     return central_time
 
 

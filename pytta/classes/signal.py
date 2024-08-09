@@ -1281,7 +1281,7 @@ class ImpulsiveResponse(_base.PyTTaObj):
 
     def __init__(self, excitation=None, recording=None,
                  method='linear', winType=None, winSize=None, overlap=None,
-                 regularization=True, ir=None, *args, **kwargs):
+                 regularization=True, freq_limits = None, ir=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if excitation is None or recording is None:
             if ir is None:
@@ -1328,8 +1328,8 @@ class ImpulsiveResponse(_base.PyTTaObj):
                                                        winType=winType,
                                                        winSize=winSize,
                                                        overlap=overlap,
-                                                       regularization=
-                                                        regularization)
+                                                       regularization=regularization,
+                                                       freq_limits = freq_limits)
         return
 
     def __repr__(self):
@@ -1413,16 +1413,26 @@ class ImpulsiveResponse(_base.PyTTaObj):
         out = {'methodInfo': self.methodInfo}
         return out
 
-    def _calculate_regu_spk(self, inputSignal, outputSignal):
+    def _calculate_regu_spk(self, inputSignal, outputSignal, freq_limits = None):
         """ Computes regularized spectrum
+
+        Parameters
+        -----------------
+        freq_limits : None or list with 2 values
+            List with desired freqMin and freqMax of your regularized IR. None is default, in which case
+            freqMin and freqMax will be computed from properties of the inputSignal and outputSignal
         """
         data = _make_pk_spectra(inputSignal.freqSignal)
         outputFreqSignal = _make_pk_spectra(outputSignal.freqSignal)
         freqVector = inputSignal.freqVector
         b = data * 0 + 10**(-200/20) # inside signal freq range
         a = data * 0 + 1 # outside signal freq range
-        minFreq = np.max([inputSignal.freqMin, outputSignal.freqMin])
-        maxFreq = np.min([inputSignal.freqMax, outputSignal.freqMax])
+        if freq_limits is None:
+            minFreq = np.max([inputSignal.freqMin, outputSignal.freqMin])
+            maxFreq = np.min([inputSignal.freqMax, outputSignal.freqMax])
+        else:
+            minFreq = freq_limits[0]
+            maxFreq = freq_limits[1]
         # Calculate epsilon
         eps = self._crossfade_spectruns(a, b,
                                         [minFreq/np.sqrt(2),
@@ -1446,10 +1456,120 @@ class ImpulsiveResponse(_base.PyTTaObj):
                         inputSignal.samplingRate,
                         signalType='energy')
         return C
+    
+    def _naive_deconv(self, inputSignal, outputSignal):
+        """ Deconvolution via naive method
+        
+        H(jw) = Y(jw)/X(jw)
+        
+        no zero padding is performed
+        """
+        result = outputSignal / inputSignal
+        return result
+    
+    def _regularized_deconv(self, inputSignal, outputSignal, freq_limits = None):
+        """ Deconvolution with regularization
+        
+        H = Y(jw)*C(jw), with C(jw) = conj(X(jw))/(X(jw)+ e(jw))
+        
+        no zero padding is performed
+        """
+        C = self._calculate_regu_spk(inputSignal, outputSignal, freq_limits = freq_limits)
+        result = outputSignal * C
+        return result
+    
+    def _regularized_zp_deconv(self, inputSignal, outputSignal, freq_limits = None,
+                               num_zeros = None):
+        """ Deconvolution with regularization
+        
+        H = Y(jw)*C(jw), with C(jw) = conj(X(jw))/(X(jw)+ e(jw))
+        
+        zero padding is performed
+        """
+        if num_zeros is None:
+            num_zeros = inputSignal.timeSignal.shape[0]
+            
+        inputSignal_zp = inputSignal.zero_padding(num_zeros  = num_zeros)
+        outputSignal_zp = outputSignal.zero_padding(num_zeros = num_zeros)
+
+        C = self._calculate_regu_spk(inputSignal_zp, outputSignal_zp, freq_limits = freq_limits)
+        result = outputSignal_zp * C
+        return result
+    
+    def _deconv_invfilter(self, inputSignal, outputSignal):
+        """ deconvolve by generating time response of an inverse filter for the sweep
+        """
+        R = np.log(inputSignal.freqMax/inputSignal.freqMin)
+        
+        # Inverse filter
+        k = np.exp(inputSignal.timeVector*R/inputSignal.timeVector[-1])
+        f = inputSignal.timeSignal.flatten()[::-1]/k
+        f = f/np.amax(np.abs(f))
+        # Impulse response
+        #outputSignal.timeSignal.flatten()
+        ht = ss.fftconvolve(outputSignal.timeSignal.flatten(), f, mode='same')#*inputSignal.numSamples/inputSignal.samplingRate
+        ht = np.roll(ht, shift = int(len(ht)/2))
+        result = SignalObj(signalArray = ht, domain='time', signalType = 'power', 
+                           samplingRate = inputSignal.samplingRate, freqMin = inputSignal.freqMin,
+                           freqMax = inputSignal.freqMax)
+        return result
+    
+    
+    def _welch_h1_deconv(self, inputSignal, outputSignal, winType = None, 
+                         winSize = None, overlap = None):
+        """ Deconvolution with H1 statistical estimator
+        
+        Welch's method is used
+        """
+    
+        if winType is None:
+            winType = 'hann'
+        if winSize is None:
+            winSize = inputSignal.samplingRate//2
+        if overlap is None:
+            overlap = 0.5
+        # sig1.shape[0]
+        result = SignalObj(np.zeros((inputSignal.timeSignal.shape[0]//2 + 1,
+                                     outputSignal.freqSignal.shape[1])),
+                           domain='freq',
+                           samplingRate=inputSignal.samplingRate,
+                           signalType='energy')
+        if outputSignal.numChannels > 1:
+            if inputSignal.numChannels > 1:
+                if inputSignal.numChannels\
+                        != outputSignal.numChannels:
+                    raise ValueError("Both signal-like objects must have\
+                                     the same number of channels.")
+                for channel in range(outputSignal.numChannels):
+                    XY, XX = self._calc_csd_tf(
+                            inputSignal.timeSignal[:, channel],
+                            outputSignal.timeSignal[:, channel],
+                            inputSignal.samplingRate,
+                            winType, winSize, winSize*overlap)
+                    result.freqSignal[:, channel] \
+                        = np.array(XY/XX, ndmin=2).T
+            else:
+                for channel in range(outputSignal.numChannels):
+                    XY, XX = self._calc_csd_tf(
+                            inputSignal.timeSignal,
+                            outputSignal.timeSignal[:, channel],
+                            inputSignal.samplingRate,
+                            winType, winSize, winSize*overlap)
+                    result.freqSignal[:, channel] \
+                        = np.array(XY/XX, ndmin=2).T
+        else:
+            XY, XX = self._calc_csd_tf(
+                    inputSignal.timeSignal,
+                    outputSignal.timeSignal,
+                    inputSignal.samplingRate,
+                    winType, winSize, winSize*overlap)
+            result.freqSignal = np.array(XY/XX, ndmin=2).T
+        return result
+
 
     def _calculate_tf_ir(self, inputSignal, outputSignal, method='linear',
                          winType=None, winSize=None, overlap=None,
-                         regularization=False):
+                         regularization=False, freq_limits = None):
         if type(inputSignal) is not type(outputSignal):
             raise TypeError("Only signal-like objects can become an \
                             Impulsive Response.")
@@ -1459,7 +1579,7 @@ class ImpulsiveResponse(_base.PyTTaObj):
         
         if method == 'linear':
             if regularization:
-                C = self._calculate_regu_spk(inputSignal, outputSignal)
+                C = self._calculate_regu_spk(inputSignal, outputSignal, freq_limits = freq_limits)
                 result = outputSignal * C
             else:
                 result = outputSignal / inputSignal
@@ -1471,7 +1591,7 @@ class ImpulsiveResponse(_base.PyTTaObj):
                 outputSignal.timeSignal.shape[0])
 
             if regularization:
-                C = self._calculate_regu_spk(inputSignal_zp, outputSignal_zp)
+                C = self._calculate_regu_spk(inputSignal_zp, outputSignal_zp, freq_limits = freq_limits)
                 result = outputSignal_zp * C
             else:
                 result = outputSignal_zp / inputSignal_zp
@@ -1660,10 +1780,12 @@ class ImpulsiveResponse(_base.PyTTaObj):
                      numberOfSamples, overlapSamples):
         f, S11 = ss.csd(sig1, sig1, samplingRate, window=windowName,
                         nperseg=numberOfSamples, noverlap=overlapSamples,
-                        axis=0)
+                        nfft = sig1.shape[0],
+                        axis=0, scaling = 'spectrum')
         f, S12 = ss.csd(sig1, sig2, samplingRate, window=windowName,
                         nperseg=numberOfSamples, noverlap=overlapSamples,
-                        axis=0)
+                        nfft = sig1.shape[0],
+                        axis=0, scaling = 'spectrum')
         del f
         return S12, S11
 
