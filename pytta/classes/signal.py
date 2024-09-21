@@ -158,7 +158,7 @@ class SignalObj(_base.PyTTaObj):
         if True in np.iscomplex(signalArray):
             dtype = 'complex64'
         else:
-            dtype = 'float32'
+            dtype = 'float64'#'float32'
         # Converting signalArray from list to np.array
         if isinstance(signalArray, list):
             signalArray = np.array(signalArray, dtype=dtype, ndmin=2).T
@@ -738,7 +738,7 @@ class SignalObj(_base.PyTTaObj):
     def plot_spectrogram(self, winType:str='hann', winSize:int=1024,
                          overlap:float=0.5, xLabel:str=None, yLabel:str=None,
                          yLim:list=None, xLim:list=None, title:str=None,
-                         decimalSep:str=','):
+                         decimalSep:str='.'):
         """Plots a signal spectrogram.
 
         xLabel, yLabel, and title are saved for the next plots when provided.
@@ -1147,7 +1147,7 @@ class SignalObj(_base.PyTTaObj):
             adjustedFreqSignal = np.zeros(self._freqSignal.shape, dtype=np.complex_)
             # * N/2 for AC
             adjustedFreqSignal[1:, :] = \
-                self._freqSignal * len(self._freqSignal)
+                self._freqSignal[1:, :] * len(self._freqSignal)
             # * N for DC
             adjustedFreqSignal[0, :] = \
                 self._freqSignal[0, :] * self.numSamples
@@ -1496,10 +1496,10 @@ class ImpulsiveResponse(_base.PyTTaObj):
         result = outputSignal_zp * C
         return result
     
-    def _deconv_invfilter(self, inputSignal, outputSignal):
+    def _deconv_invfilter(self, inputSignal, outputSignal, freq_limits):
         """ deconvolve by generating time response of an inverse filter for the sweep
         """
-        R = np.log(inputSignal.freqMax/inputSignal.freqMin)
+        R = np.log(freq_limits[1]/freq_limits[0])
         
         # Inverse filter
         k = np.exp(inputSignal.timeVector*R/inputSignal.timeVector[-1])
@@ -1514,6 +1514,27 @@ class ImpulsiveResponse(_base.PyTTaObj):
                            freqMax = inputSignal.freqMax)
         return result
     
+    # def _deconv_invfilter_fd(self, inputSignal, outputSignal, freq_limits):
+    #     """ deconvolve by generating freq response of an inverse filter for the sweep
+    #     """
+    #     # f_ax = linspace(0,fs,len+1).';
+    #     # f_ax = f_ax(1:end-1);
+    #     # inverse filter in frequency domain
+    #     # T = 10; % time duration
+
+    #     L = inputSignal.timeVector[-1]/np.log(freq_limits[1]/freq_limits[0]);
+    #     freq = inputSignal.freqVector
+    #     X_inv = 2*np.sqrt(freq/L)*np.exp(-1j*2*np.pi*freq*L*(1-np.log(freq/freq_limits[0])) + 1j*np.pi/4);
+                
+    #     # Deconvolution
+    #     H = outputSignal.freqSignal.flatten()*X_inv
+    #     print(freq.shape)
+    #     print(H.shape)
+    #     H[0] = 0; # avoid Inf at DC
+    #     result = SignalObj(signalArray = H, domain='freq', signalType = 'power', 
+    #                        samplingRate = inputSignal.samplingRate, freqMin = inputSignal.freqMin,
+    #                        freqMax = inputSignal.freqMax)
+    #     return result
     
     def _welch_h1_deconv(self, inputSignal, outputSignal, winType = None, 
                          winSize = None, overlap = None):

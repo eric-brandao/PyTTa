@@ -41,7 +41,7 @@ import traceback
 from warnings import warn
 
 
-def sin(Arms=0.5,
+def sin(Amp=1.0,
         freq=1000,
         timeLength=1,
         phase=2*np.pi,
@@ -54,8 +54,8 @@ def sin(Arms=0.5,
     Creation parameters:
     --------------------
 
-        * Arms (float) (optional):
-            The signal's RMS amplitude.
+        * Amp (float) (optional):
+            The signal's amplitude.
 
             >>> Apeak = Arms*sqrt(2);
 
@@ -97,7 +97,7 @@ def sin(Arms=0.5,
     t = np.linspace(0,
                     timeLength - (1/samplingRate),
                     int(samplingRate*timeLength))
-    sin = Arms*(2**(1/2)) * np.sin(2*np.pi*freq*t+phase)
+    sin = Amp * np.sin(2*np.pi*freq*t+phase)
     sinSigObj = SignalObj(sin, domain='time', samplingRate=samplingRate,
                           freqMin=default.freqMin, freqMax=default.freqMax)
     sinSigObj.creation_name = creation_name

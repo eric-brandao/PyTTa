@@ -896,7 +896,7 @@ def spectrogram(sigObjs, winType, winSize,
         cbar = fig.colorbar(pcmesh)
         cbar.ax.tick_params(labelsize=12)
         cbar.ax.set_ylabel(data['label'], fontsize=14)
-
+        plt.tight_layout()
     return figs
 
 
