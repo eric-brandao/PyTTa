@@ -15,6 +15,7 @@ from pytta.classes import _base
 from pytta import _h5utils as _h5
 from pytta.utils import fractional_octave_frequencies as FOF
 from pytta import _plot as plot
+#from pytta.generate import inverse_sweep as inv_sweep
 import copy as cp
 
 # filterwarnings("default", category=DeprecationWarning)
@@ -155,6 +156,7 @@ class SignalObj(_base.PyTTaObj):
                  *args,
                  **kwargs):
         # Check if input is a complex array
+        
         if True in np.iscomplex(signalArray):
             dtype = 'complex64'
         else:
@@ -204,6 +206,11 @@ class SignalObj(_base.PyTTaObj):
             self.freqMin = default.freqMin
         if self.freqMax is None:
             self.freqMax = default.freqMax
+        
+        # if 'freqLimits' in kwargs:
+        #     start_stop_margin = kwargs.pop('freqLimits')
+        #     self.startMargin = start_stop_margin['startMargin']
+        #     self.stopMargin = start_stop_margin['stopMargin']
 
         return
 
@@ -467,7 +474,7 @@ class SignalObj(_base.PyTTaObj):
     def play(self,
              channels: list = None, 
              mapping: list = None,
-             latency='low',
+             latency='low', normalize = True,
              **kwargs):
         """
         Play method.
@@ -512,11 +519,19 @@ class SignalObj(_base.PyTTaObj):
         indexes = [self.channels.mapping.index(chNum) for chNum in channels]
         
         timeSignalSel = self.timeSignal[:,indexes[0]]
+        if np.amax(np.abs(timeSignalSel)) >= 1 and normalize:
+            print("Don't force the frienship. Level is too high - I'll normalize it for you.")
+            timeSignalSel = self.normalize(timeSignalSel)
         
         if len(channels) > 1: 
             for idx in indexes[1:]:
+                timeSignal_extra_channel = self.timeSignal[:,idx]
+                if np.amax(np.abs(timeSignal_extra_channel)) >= 1 and normalize:
+                    print("Don't force the frienship. Level is too high - I'll normalize it for you.")
+                    timeSignal_extra_channel = self.normalize(timeSignal_extra_channel)
+                    
                 timeSignalSel = np.vstack((timeSignalSel,
-                                           self.timeSignal[:,idx]))
+                                           timeSignal_extra_channel))
         
         timeSignalSel = timeSignalSel.T
         
@@ -530,6 +545,26 @@ class SignalObj(_base.PyTTaObj):
                 mapping=mapping, **kwargs)
         
         return
+    
+    def normalize(self, timeSignal, target_level = 0.95):
+        """ Normalize level before playback 
+        
+        if signal goes beyond +-1 it will distord the playback. In this case, you
+        need normalization before playback
+        
+        Input :
+        ---------------
+            timeSignal : 1dArray
+                Vector with time amplitudes
+            target_level : float 
+                should be <1 (not equal to 1)
+        """
+        if target_level >= 1.0:
+            target_level = 0.99
+            
+        max_value_of_signal = np.amax(np.abs(timeSignal))
+        new_timeSignal = target_level * timeSignal/max_value_of_signal
+        return new_timeSignal
 
     def plot_time(self, xLabel:str=None, yLabel:str=None,
                 yLim:list=None, xLim:list=None, title:str=None,
@@ -738,7 +773,8 @@ class SignalObj(_base.PyTTaObj):
     def plot_spectrogram(self, winType:str='hann', winSize:int=1024,
                          overlap:float=0.5, xLabel:str=None, yLabel:str=None,
                          yLim:list=None, xLim:list=None, title:str=None,
-                         decimalSep:str='.'):
+                         decimalSep:str='.', normalize = True, dinamic_range = 50,
+                         log_in_freq_scale = False):
         """Plots a signal spectrogram.
 
         xLabel, yLabel, and title are saved for the next plots when provided.
@@ -807,7 +843,9 @@ class SignalObj(_base.PyTTaObj):
 
         figs = plot.spectrogram((self,), winType, winSize,
                                 overlap, xLabel, yLabel, xLim, yLim,
-                                title, decimalSep)
+                                title, decimalSep, normalize = normalize,
+                                dinamic_range = dinamic_range,
+                                log_in_freq_scale = log_in_freq_scale)
         return figs
 
     def calib_voltage(self, chIndex, refSignalObj, refVrms=1, refFreq=1000):
@@ -1444,17 +1482,20 @@ class ImpulsiveResponse(_base.PyTTaObj):
                                             [maxFreq,
                                             maxFreq*np.sqrt(2)],
                                             freqVector)
+        # eps = \
+        #     eps \
+        #         * float(np.max(np.abs(outputFreqSignal)))**2 \
+        #             * 1/2
         eps = \
             eps \
-                * float(np.max(np.abs(outputFreqSignal)))**2 \
+                * float(np.max(np.abs(data)))**2 \
                     * 1/2
+        # plt.figure()
+        # plt.semilogx(eps)
         C = np.conj(data) / \
             (np.conj(data)*data + eps)
-        C = _make_rms_spectra(C)
-        C = SignalObj(C,
-                        'freq',
-                        inputSignal.samplingRate,
-                        signalType='energy')
+        # C = _make_rms_spectra(C)
+        C = SignalObj(C, 'freq', inputSignal.samplingRate, signalType='power')
         return C
     
     def _naive_deconv(self, inputSignal, outputSignal):
@@ -1474,7 +1515,7 @@ class ImpulsiveResponse(_base.PyTTaObj):
         
         no zero padding is performed
         """
-        C = self._calculate_regu_spk(inputSignal, outputSignal, freq_limits = freq_limits)
+        C = _calculate_regu_spk(inputSignal, freq_limits = freq_limits)
         result = outputSignal * C
         return result
     
@@ -1496,7 +1537,22 @@ class ImpulsiveResponse(_base.PyTTaObj):
         result = outputSignal_zp * C
         return result
     
-    def _deconv_invfilter(self, inputSignal, outputSignal, freq_limits):
+    def _deconv_invfilter(self, inputSignal, outputSignal):
+        """ deconvolve by generating time response of an inverse filter for the sweep
+        """
+        inv_xt = inverse_sweep(inputSignal)
+        C = _make_pk_spectra(inv_xt.freqSignal)
+        C = SignalObj(C, 'freq', inputSignal.samplingRate, signalType='energy')
+        ht_non_shifted = outputSignal * C
+        # ht_time_shifted = np.roll(ht_non_shifted.timeSignal, 
+        #                           shift = int((0.1+0.5)*44100))
+        # ht_time_shifted = ht_non_shifted.timeSignal
+        result = SignalObj(signalArray = ht_non_shifted.timeSignal, domain='time', signalType = 'energy', 
+                           samplingRate = inputSignal.samplingRate, freqMin = inputSignal.freqMin,
+                           freqMax = inputSignal.freqMax)
+        return result
+    
+    def _deconv_invfilter2(self, inputSignal, outputSignal, freq_limits):
         """ deconvolve by generating time response of an inverse filter for the sweep
         """
         R = np.log(freq_limits[1]/freq_limits[0])
@@ -1600,7 +1656,7 @@ class ImpulsiveResponse(_base.PyTTaObj):
         
         if method == 'linear':
             if regularization:
-                C = self._calculate_regu_spk(inputSignal, outputSignal, freq_limits = freq_limits)
+                C = _calculate_regu_spk(inputSignal, freq_limits = freq_limits)
                 result = outputSignal * C
             else:
                 result = outputSignal / inputSignal
@@ -1612,7 +1668,7 @@ class ImpulsiveResponse(_base.PyTTaObj):
                 outputSignal.timeSignal.shape[0])
 
             if regularization:
-                C = self._calculate_regu_spk(inputSignal_zp, outputSignal_zp, freq_limits = freq_limits)
+                C = _calculate_regu_spk(inputSignal_zp, freq_limits = freq_limits)
                 result = outputSignal_zp * C
             else:
                 result = outputSignal_zp / inputSignal_zp
@@ -1824,3 +1880,92 @@ def _make_pk_spectra(freqSignal):
     newFreqSignal[0, :] = freqSignal[0, :]
     return newFreqSignal
 
+def _calculate_regu_spk(inputSignal, freq_limits = None):
+    """ Computes regularized spectrum
+
+    Parameters
+    -----------------
+    freq_limits : None or list with 2 values
+        List with desired freqMin and freqMax of your regularized IR. None is default, in which case
+        freqMin and freqMax will be computed from properties of the inputSignal and outputSignal
+    """
+    # data = _make_rms_spectra(inputSignal.freqSignal) - this seem incorrect
+    input_sig = SignalObj(inputSignal.freqSignal, 'freq', inputSignal.samplingRate, 
+                          signalType='energy') # transform to energy - it is in ITA-toolbox
+
+    data = _make_pk_spectra(input_sig.freqSignal) #_make_pk_spectra seem incorrect in Pytta    
+    # data = input_sig.freqSignal 
+    # plt.figure()
+    # plt.semilogx(inputSignal.freqVector, 20*np.log10(np.abs(data)))
+    # plt.xlim((20,20000))
+    # plt.ylim((-130,-30))
+    #outputFreqSignal = _make_pk_spectra(outputSignal.freqSignal)
+   
+    freqVector = input_sig.freqVector
+    b = data * 0 + 10**(-200/20) # inside signal freq range
+    a = data * 0 + 1 # outside signal freq range
+    
+    # plt.figure()
+    # plt.semilogx(freqVector, b)
+    # plt.semilogx(freqVector, a)
+    
+    if freq_limits is None:
+        minFreq = inputSignal.freqMin #np.max([inputSignal.freqMin, outputSignal.freqMin])
+        maxFreq = inputSignal.freqMax #np.min([inputSignal.freqMax, outputSignal.freqMax])
+    else:
+        minFreq = freq_limits[0]
+        maxFreq = freq_limits[1]
+    # Calculate epsilon
+    eps = _crossfade_spectruns(a, b, [minFreq/np.sqrt(2), minFreq], freqVector)
+           
+    if maxFreq < np.min([maxFreq*np.sqrt(2), int(inputSignal.samplingRate/2)]):
+        eps = _crossfade_spectruns(eps, a, [maxFreq, maxFreq*np.sqrt(2)], freqVector)    
+    # eps = \
+    #     eps \
+    #         * float(np.max(np.abs(outputFreqSignal)))**2 \
+    #             * 1/2
+    eps = eps * float(np.max(np.abs(data)))**2 * 1/2
+    
+    # plt.figure()
+    # plt.semilogx(inputSignal.freqVector, 20*np.log10(np.abs(eps)))
+    # plt.grid()
+    # plt.xlim((20, 20000))
+    # plt.ylim((-170, -70))
+    
+    C = np.conj(data) / (np.conj(data) * data + eps)
+    C = _make_rms_spectra(C)
+    C = SignalObj(C, 'freq', inputSignal.samplingRate, signalType='energy')
+    return C
+
+def _crossfade_spectruns(a, b, freqLims, freqVector):
+    f0 = freqLims[0]
+    f1 = freqLims[1]
+    f0idx = np.where(freqVector >= f0)[0][0]
+    f1idx = np.where(freqVector <= f1)[0][-1]
+    totalSamples = a.shape[0]
+    xsamples = f1idx - f0idx
+    win = ss.hann(2*xsamples)
+
+    rightWin = win[xsamples-1:-1]
+    fullRightWin = np.concatenate((np.ones(f0idx),
+                                   rightWin,
+                                   np.zeros(totalSamples-len(rightWin)-f0idx)))
+
+    leftWin = win[0:xsamples]
+    fullLeftWin = np.concatenate((np.zeros(f0idx),
+                                   leftWin,
+                                   np.ones(totalSamples-len(leftWin)-f0idx)))
+
+    aFreqSignal = np.zeros(a.shape, dtype=np.complex_)
+    bFreqSignal = np.zeros(b.shape, dtype=np.complex_)
+
+    for chIndex in range(a.shape[1]):
+        aFreqSignal[:,chIndex] = a[:,chIndex] * fullRightWin
+        bFreqSignal[:,chIndex] = b[:,chIndex] * fullLeftWin
+
+    a = aFreqSignal
+    b = bFreqSignal
+
+    result = a + b
+
+    return result

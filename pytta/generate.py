@@ -35,8 +35,10 @@ from pytta import default
 from pytta.classes import SignalObj, RecMeasure, FRFMeasure, \
                           PlayRecMeasure, Streaming
 from pytta.classes import OctFilter as _OctFilter
-from scipy import signal as ss
+# from scipy import signal as ss
+import scipy.signal.windows as ss
 import numpy as np
+import matplotlib.pyplot as plt
 import traceback
 from warnings import warn
 
@@ -191,6 +193,9 @@ def sweep(freqMin=None,
     freqLimits = {'freqMin': freqMin / (2**(1/6)),
                   'freqMax': min(freqMax*(2**(1/6)), samplingRate/2)}
     samplingTime = 1/samplingRate  # [s] sampling period
+    
+    # start and stop margin
+    start_stop_margin = {'startMargin': startMargin, 'stopMargin': stopMargin}
 
     stopSamples = stopMargin*samplingRate
     # [samples] initial silence number of samples
@@ -235,7 +240,8 @@ def sweep(freqMin=None,
 
     # transforms into a pytta signalObj and sets the correct name
     sweepSignal = SignalObj(signalArray=timeSignal, domain='time',
-                            samplingRate=samplingRate,
+                            samplingRate=samplingRate, 
+                            startMargin = startMargin, stopMargin = stopMargin,
                             **freqLimits)
 
     sweepSignal.creation_name = creation_name
@@ -278,6 +284,105 @@ def __do_sweep_windowing(inputSweep,
                                  windowEnd[freqMaxSample:-1]))
     newSweep = fullWindow * inputSweep
     return newSweep
+
+
+def inverse_sweep(sweepObj, windowing='hann'):
+    """
+    Generates an the inverse filter of a sweep signal.
+
+    >>> x = pytta.generate.sweep()
+    >>> x.plot_time()
+
+    Return a signalObj containing a logarithmic chirp signal from 17.8 Hz
+    to 22050 Hz, with a fade in beginning at 17.8 Hz time instant and ending at
+    the 20 Hz time instant; plus a fade out beginning at 20000 Hz time instant
+    and ending at 22050 Hz time instant.
+
+    The fade in and the fade out are made with half hanning window. First half
+    for the fade in and last half for the fade out. Different number of points
+    are used for each fade, so the number of time samples during each frequency
+    is respected.
+
+    Input arguments (default), (type):
+    ------------------------
+
+        * freqMin (20), (float)
+
+        * freqMax (20), (float)
+
+        * samplingRate (44100), (int)
+
+        * fftDegree (18), (float)
+
+        * startMargin (0.3), (float)
+
+        * stopMargin (0.7), (float)
+
+        * method (logarithmic'), (string)
+
+        * windowing ('hann'), (string)
+
+
+    """
+    # Code snippet to guarantee that generated object name is
+    # the declared at global scope
+    # for frame, line in traceback.walk_stack(None):
+    for framenline in traceback.walk_stack(None):
+        # varnames = frame.f_code.co_varnames
+        varnames = framenline[0].f_code.co_varnames
+        if varnames == ():
+            break
+    # creation_file, creation_line, creation_function, \
+    #     creation_text = \
+    extracted_text = \
+        traceback.extract_stack(framenline[0], 1)[0]
+        # traceback.extract_stack(frame, 1)[0]
+    # creation_name = creation_text.split("=")[0].strip()
+    creation_name = extracted_text[3].split("=")[0].strip()
+    #sampling rate
+    fs = sweepObj.samplingRate
+    # Isolate sweep from silence  
+    startSamples = int(sweepObj.startMargin * fs)+1
+    stopSamples = int((sweepObj.timeVector[-1]-sweepObj.stopMargin) * fs)+1
+    sweep_wo_silence = sweepObj.timeSignal[startSamples:stopSamples, 0]
+    time_wo_silence = np.linspace(0, (len(sweep_wo_silence)-1)/fs, len(sweep_wo_silence))
+    # Reverse compensated sweep
+    # f_max_min_ratio = np.log(freq_limits[1]/freq_limits[0])
+    f_max_min_ratio = np.log(sweepObj.freqMax/sweepObj.freqMin)
+    time_gain_compensation = np.exp(time_wo_silence * f_max_min_ratio / time_wo_silence[-1])
+    rms_time_gain_compensation = np.sqrt(np.sum(time_gain_compensation**2)/len(time_gain_compensation))
+    
+    rms_compensation = np.sum(sweep_wo_silence**2)/len(sweep_wo_silence)
+    
+    #rms_compensation = np.sum(sweepObj.timeSignal.flatten()**2)/len(sweepObj.timeSignal.flatten())
+    # print(rms_compensation)
+    
+    reversed_comp_sweep = sweep_wo_silence[::-1] / time_gain_compensation
+    # reversed_comp_sweep /= 2*rms_compensation**2 ## Unsure of this
+    # eps * float(np.max(np.abs(data)))**2 * 1/2
+    
+    # plug in the silences of stop and star margins
+    reversed_comp_sweep_w_sil = np.zeros(len(sweepObj.timeSignal.flatten()))
+    revstartSamples = int(sweepObj.stopMargin * fs)+1
+    revstopSamples = int((sweepObj.timeVector[-1]-sweepObj.startMargin) * fs)+1
+    reversed_comp_sweep_w_sil[revstartSamples:revstopSamples] = reversed_comp_sweep
+    
+    
+    # frequency limits [Hz]
+    freqLimits = {'freqMin': sweepObj.freqMin / (2**(1/6)),
+                  'freqMax': min(sweepObj.freqMax*(2**(1/6)), sweepObj.samplingRate/2)}
+    inverse_sweepSignal = SignalObj(signalArray = reversed_comp_sweep_w_sil, domain='time',
+                        samplingRate = sweepObj.samplingRate, signalType='energy',
+                        startMargin = sweepObj.startMargin, stopMargin = sweepObj.stopMargin,
+                        **freqLimits)
+    
+    dirac = inverse_sweepSignal * sweepObj
+    max_dirac = np.amax(dirac.timeSignal)
+    #gain_comp = 0.5*np.amax(sweepObj.timeSignal)/max_dirac
+    print(max_dirac)
+    inverse_sweepSignal.timeSignal = inverse_sweepSignal.timeSignal# * gain_comp
+    
+    return inverse_sweepSignal
 
 
 def random_noise(kind='white',

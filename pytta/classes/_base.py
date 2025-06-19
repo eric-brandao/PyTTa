@@ -59,7 +59,9 @@ class PyTTaObj(RICI):
                  lengthDomain=None,
                  fftDegree=None,
                  timeLength=None,
-                 numSamples=None):
+                 numSamples=None,
+                 startMargin=None,
+                 stopMargin=None):
         super().__init__()
         self._samplingRate = samplingRate
         self._freqMin = freqMin
@@ -69,6 +71,9 @@ class PyTTaObj(RICI):
         self._fftDegree = fftDegree
         self._timeLength = timeLength
         self._numSamples = numSamples
+        self._startMargin = startMargin
+        self._stopMargin = stopMargin
+        
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
@@ -146,6 +151,24 @@ class PyTTaObj(RICI):
         self._freqMax = round(np.min((newFreqMax*(2**(1/6)),
                                       self.samplingRate//2)), 2)
         return
+    
+    @property
+    def startMargin(self):
+        return self._startMargin
+    
+    @startMargin.setter
+    def startMargin(self, newstartMargin):
+        self._startMargin = newstartMargin
+        return 
+    
+    @property
+    def stopMargin(self):
+        return self._stopMargin
+    
+    @stopMargin.setter
+    def stopMargin(self, newstopMargin):
+        self._stopMargin = newstopMargin
+        return 
 
     @property
     def comment(self):

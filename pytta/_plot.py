@@ -804,7 +804,8 @@ def _curve_data_extractor_bars(analyses):
 
 def spectrogram(sigObjs, winType, winSize,
                 overlap, xLabel, yLabel, xLim, yLim,
-                title, decimalSep):
+                title, decimalSep, normalize = True, dinamic_range = 50,
+                log_in_freq_scale = False):
     """
     Plots a signal spectrogram in frequency domain.
 
@@ -860,42 +861,50 @@ def spectrogram(sigObjs, winType, winSize,
 
     figs = []
     curveData = _curve_data_extractor_spectrogram(sigObjs)
+    #print(curveData[0]['label'])
     for data in curveData:
         fig = plt.figure(figsize=(10, 5))
         figs.append(fig)
         ax = fig.add_axes([0.10, 0.15, 0.93, 0.77], polar=False,
                         projection='rectilinear')
+
         ax.set_snap(False)
 
         _spectrogram, _specTime, _specFreq = \
             _calc_spectrogram(data['timeSignal'], data['timeVector'],
                               data['samplingRate'], overlap, winType,
-                              winSize, data['dBRef'])
-
+                              winSize, data['dBRef'], normalize = normalize)
+        
+        max_on_spectrogram = np.amax(_spectrogram)
         pcmesh = ax.pcolormesh(_specTime, _specFreq, _spectrogram,
-                            cmap=plt.jet(), vmin=-120)
-
+                            cmap=plt.jet(), vmin = max_on_spectrogram - dinamic_range,
+                            vmax = max_on_spectrogram)
+        
         if xLim is None:
             xLim = (data['timeVector'][0], data['timeVector'][-1])
         ax.set_xlim(xLim)
 
         if yLim is None:
             yLim = (data['minFreq'], data['maxFreq'])
-        ax.set_ylim(yLim)
-
+        
+        if log_in_freq_scale:
+            ax.set_yscale('log')
+        
         ax.yaxis.set_major_locator(ticker.MaxNLocator(min_n_ticks=8))
         ax.yaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=True))
         ax.xaxis.set_major_locator(ticker.MaxNLocator(min_n_ticks=10))
         ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useOffset=True))
         for item in (ax.get_xticklabels() + ax.get_yticklabels()):
-            item.set_fontsize(14)
-
-        ax.set_xlabel(xLabel, fontsize=16)
-        ax.set_ylabel(yLabel, fontsize=16)
+            item.set_fontsize(12)
+        if log_in_freq_scale:
+            ax.set_yticks([16, 32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000])
+        ax.set_ylim(yLim)  
+        ax.set_xlabel(xLabel, fontsize=12)
+        ax.set_ylabel(yLabel, fontsize=12)
 
         cbar = fig.colorbar(pcmesh)
         cbar.ax.tick_params(labelsize=12)
-        cbar.ax.set_ylabel(data['label'], fontsize=14)
+        cbar.ax.set_ylabel(data['label'], fontsize=12)
         plt.tight_layout()
     return figs
 
@@ -957,7 +966,7 @@ def _curve_data_extractor_spectrogram(sigObjs):
 
 
 def _calc_spectrogram(timeSignal, timeVector, samplingRate, overlap, winType,
-                      winSize, dBRef):
+                      winSize, dBRef, normalize = True):
     window = eval('ss.windows.' + winType)(winSize)
     nextIdx = int(winSize*overlap)
     rng = int(timeSignal.shape[0]/winSize/overlap - 1)
@@ -971,6 +980,7 @@ def _calc_spectrogram(timeSignal, timeVector, samplingRate, overlap, winType,
             endIdx = winSize + N*nextIdx
             sliceAudio = window*timeSignal[strIdx:endIdx]
             sliceFFT = np.fft.rfft(sliceAudio, axis=0)
+            
             sliceMag = np.absolute(sliceFFT) * (2/sliceFFT.size)
             _spectrogram[:, N] = 20*np.log10(sliceMag/dBRef)
 
@@ -979,6 +989,10 @@ def _calc_spectrogram(timeSignal, timeVector, samplingRate, overlap, winType,
             sliceFFT = np.fft.rfft(sliceAudio, axis=0)
             sliceMag = np.absolute(sliceFFT) * (2/sliceFFT.size)
             _spectrogram[:, N] = 20*np.log10(sliceMag)
+
+    if normalize:
+        max_db = np.amax(_spectrogram)
+        _spectrogram -= max_db
 
     return _spectrogram, _specTime, _specFreq
 
