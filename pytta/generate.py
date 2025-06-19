@@ -35,8 +35,8 @@ from pytta import default
 from pytta.classes import SignalObj, RecMeasure, FRFMeasure, \
                           PlayRecMeasure, Streaming
 from pytta.classes import OctFilter as _OctFilter
-# from scipy import signal as ss
-import scipy.signal.windows as ss
+from scipy import signal as ss
+#import scipy.signal as ss
 import numpy as np
 import matplotlib.pyplot as plt
 import traceback
@@ -272,8 +272,10 @@ def __do_sweep_windowing(inputSweep,
     # exact sample where the chirp reaches freqMax [Hz]
     freqMaxSample = np.where(freqSweep <= freqMax)
     freqMaxSample = len(freqSweep) - freqMaxSample[-1][-1]
-    windowStart = ss.hann(2*freqMinSample)
-    windowEnd = ss.hann(2*freqMaxSample)
+    # windowStart = ss.hann(2*freqMinSample)
+    # windowEnd = ss.hann(2*freqMaxSample)
+    windowStart = ss.windows.hann(2*freqMinSample)
+    windowEnd = ss.windows.hann(2*freqMaxSample)
 
     # Uses first half of windowStart, last half of windowEnd, and a vector of
     # ones with the remaining length, in between the half windows
@@ -565,6 +567,7 @@ def __do_noise_windowing(inputNoise,
     # sample equivalent to the first five percent of noise duration
     fivePercentSample = int((5/100) * (noiseSamples))
     windowStart = ss.hann(2*fivePercentSample)
+    windowStart = ss.windows.hann(2*fivePercentSample)
     fullWindow = np.concatenate((windowStart[0:fivePercentSample],
                                  np.ones(int(noiseSamples-fivePercentSample))))
     newNoise = (fullWindow * inputNoise.T).T
